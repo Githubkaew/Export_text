@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Chat Exporter (PDF / MD / DOCX) — Table-Ready (UMD Fixed)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", "Noto Sans", Arial, sans-serif; margin: 0; padding: 24px; background: #0b0b0c; color: #e9e9ea; }
+    .container { max-width: 980px; margin: 0 auto; }
+    h1 { margin: 0 0 16px; font-size: 22px; }
+    label { display: block; margin: 14px 0 6px; font-size: 13px; opacity: 0.85; }
+    input[type="text"] { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #34373a; background: #0f1113; color: #e9e9ea; }
+    textarea { width: 100%; height: 360px; padding: 12px; border-radius: 8px; border: 1px solid #34373a; background: #0f1113; color: #e9e9ea; resize: vertical; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+    button { padding: 10px 14px; border: 1px solid #34373a; background: #111418; color: #e9e9ea; border-radius: 8px; cursor: pointer; }
+    button:hover { background: #171b20; }
+    .hint { font-size: 12px; opacity: 0.75; margin-top: 6px; }
+    .preview-wrap { margin-top: 18px; }
+    .preview { background: #0f1113; border: 1px solid #34373a; border-radius: 8px; padding: 18px; min-height: 120px; overflow: auto; }
+    .preview h1 { font-size: 20px; margin: 0 0 12px; }
+    .preview h2 { font-size: 18px; margin: 18px 0 8px; }
+    .preview h3 { font-size: 16px; margin: 14px 0 6px; }
+    .preview p, .preview li { line-height: 1.6; margin: 8px 0; }
+    .preview table { width: 100%; border-collapse: collapse; margin: 10px 0; }
+    .preview th, .preview td { border: 1px solid #34373a; padding: 6px 8px; text-align: left; }
+    .page-break { break-before: page; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Chat Exporter (PDF / Markdown / DOCX) — Table-Ready (UMD Fixed)</h1>
+
+    <label for="title">ชื่อเรื่อง</label>
+    <input id="title" type="text" placeholder="เช่น สรุปบทสนทนา Perplexity">
+
+    <label for="input">วางข้อความ (รองรับ Markdown/GFM: headings, lists, code, tables)</label>
+    <textarea id="input" placeholder="# หัวข้อใหญ่
+ข้อความย่อหน้า
+
+## ตาราง GFM
+| คอลัมน์ A | คอลัมน์ B |
+| --- | --- |
+| ค่า 1 | ค่า 2 |
+
+## ตารางในโค้ดบล็อก
+"></textarea>
+
+    <div class="hint">ใช้ Marked UMD แปลง Markdown/GFM และสร้าง DOCX แบบตารางจริงด้วย docx UMD เพื่อความเข้ากันได้ในเบราว์เซอร์ [ออฟไลน์ไม่ต้องติดตั้งบันเดิล] </div>
+
+    <div class="actions">
+      <button id="btn-md">Export Markdown (.md)</button>
+      <button id="btn-pdf">Export PDF (.pdf)</button>
+      <button id="btn-docx">Export Word (.docx)</button>
+    </div>
+
+    <div class="preview-wrap">
+      <label>ตัวอย่างก่อนพิมพ์ (พื้นฐานเดียวกับ PDF)</label>
+      <div id="preview" class="preview"></div>
+    </div>
+  </div>
+
+  <!-- PDF: html2pdf.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <!-- DOCX UMD (หลัก) -->
+  <script src="https://cdn.jsdelivr.net/npm/docx@9.5.1/build/index.umd.js"></script>
+  <!-- Marked UMD -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/lib/marked.umd.js"></script>
+
+  <script>
+    // ————— Utilities —————
+    function sanitizeFileName(s) {
+      const raw = (s || 'exported-chat').trim();
+      const illegal = /[\\/:*?"<>|]+/g;
+      let cleaned = raw.replace(illegal, '_').slice(0, 120);
+      const reserved = new Set(['CON','PRN','AUX','NUL','COM1','COM2','COM3','COM4','COM5','COM6','COM7','COM8','COM9','LPT1','LPT2','LPT3','LPT4','LPT5','LPT6','LPT7','LPT8','LPT9']);
+      if (!cleaned) cleaned = 'exported-chat';
+      if (reserved.has(cleaned.toUpperCase())) cleaned += '_1';
+      return cleaned;
+    }
+
+    function escapeHtml(s) {
+      return s.replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    }
+
+    function downloadBlob(blob, filename) {
+      const a = document.createElement('a');
+      const url = URL.createObjectURL(blob);
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+    }
+
+    // ————— Fallback โหลด docx UMD จากหลาย CDN/เวอร์ชัน —————
+    async function ensureDocx() {
+      if (window.docx) return true;
+      const sources = [
+        "https://cdn.jsdelivr.net/npm/docx@9.5.1/build/index.umd.js",
+        "https://cdn.jsdelivr.net/npm/docx@9.0.3/build/index.umd.js",
+        "https://cdn.jsdelivr.net/npm/docx@8.5.0/build/index.umd.js"
+      ];
+      for (const src of sources) {
+        try {
+          await new Promise((resolve, reject) => {
+            const s = document.createElement("script");
+            s.src = src;
+            s.onload = resolve;
+            s.onerror = reject;
+            document.head.appendChild(s);
+          });
+          if (window.docx) return true;
+        } catch (e) {
+          console.warn("โหลด docx UMD ไม่สำเร็จจาก:", src, e);
+        }
+      }
+      return false;
+    }
+
+    // ————— Render Preview (Markdown → HTML via Marked) —————
+    function renderPreview() {
+      const title = document.getElementById('title').value.trim() || 'Exported Chat';
+      const md = document.getElementById('input').value || '';
+      const mdAPI = (window.marked && (window.marked.marked || window.marked));
+      if (!mdAPI || !mdAPI.parse) {
+        document.getElementById('preview').innerHTML = `<h1>${escapeHtml(title)}</h1><p>ไม่พบ Marked UMD</p>`;
+        return;
+      }
+      if (mdAPI.setOptions) mdAPI.setOptions({ gfm: true, breaks: false });
+      const htmlBody = mdAPI.parse(md);
+      document.getElementById('preview').innerHTML = `<h1>${escapeHtml(title)}</h1>` + htmlBody;
+    }
+
+    // ————— Export: Markdown —————
+    document.getElementById('btn-md').addEventListener('click', () => {
+      const title = document.getElementById('title').value.trim() || 'Exported Chat';
+      const md = document.getElementById('input').value || '';
+      const out = `# ${title}\n\n${md}`;
+      downloadBlob(new Blob([out], { type: 'text/markdown;charset=utf-8' }), sanitizeFileName(title) + '.md');
+    });
+
+    // ————— Export: PDF (html2pdf.js) —————
+    document.getElementById('btn-pdf').addEventListener('click', () => {
+      const title = document.getElementById('title').value.trim() || 'Exported Chat';
+      const element = document.getElementById('preview');
+      const opt = {
+        margin: 10,
+        filename: sanitizeFileName(title) + '.pdf',
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] }
+      };
+      html2pdf().from(element).set(opt).save();
+    });
+
+    // ————— Export: DOCX (Headings/Lists/Code + Table จริง) —————
+    document.getElementById('btn-docx').addEventListener('click', async () => {
+      const ok = await ensureDocx();
+      if (!ok) {
+        alert('ยังไม่พบไลบรารี docx (ลองรีเฟรชหรือเช็คการเชื่อมต่อ CDN)');
+        return;
+      }
+
+      const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, WidthType } = window.docx;
+
+      const title = document.getElementById('title').value.trim() || 'Exported Chat';
+      const md = document.getElementById('input').value || '';
+      const mdAPI = (window.marked && (window.marked.marked || window.marked));
+      if (!mdAPI || !mdAPI.lexer) {
+        alert('ไม่พบ Marked UMD สำหรับการแปลง Markdown');
+        return;
+      }
+
+      const tokens = mdAPI.lexer(md);
+      const children = [ new Paragraph({ text: title, heading: HeadingLevel.TITLE }) ];
+
+      const pushParagraph = (text) => {
+        if (!text || !text.trim()) { children.push(new Paragraph({ text: '' })); return; }
+        children.push(new Paragraph({ children: [ new TextRun(text) ] }));
+      };
+
+      const pushCodeBlock = (code) => {
+        const lines = (code || '').replace(/\r/g, '').split('\n');
+        for (const line of lines) {
+          children.push(new Paragraph({ children: [ new TextRun({ text: line, font: 'Consolas' }) ] }));
+        }
+      };
+
+      const tryMakeAsciiTable = (code) => {
+        const lines = code.split('\n').map(s => s.trim()).filter(Boolean);
+        if (!lines.length || !lines.every(l => l.includes('|'))) return null;
+        const contentLines = lines.filter(l => !/^[:\-| ]+$/.test(l));
+        if (contentLines.length < 2) return null;
+        const splitRow = (l) => l.replace(/^\|/, '').replace(/\|$/, '').split('|').map(s => s.trim());
+        const header = splitRow(contentLines[0]);
+        const rows = contentLines.slice(1).map(splitRow);
+        if (rows.some(r => r.length !== header.length)) return null;
+        const headerRow = new TableRow({ children: header.map(h => new TableCell({ children: [ new Paragraph(h) ] })) });
+        const dataRows = rows.map(r => new TableRow({ children: r.map(c => new TableCell({ children: [ new Paragraph(c) ] })) }));
+        return new Table({
+          rows: [headerRow, ...dataRows],
+          width: { size: 100, type: WidthType.PERCENTAGE }
+        });
+      };
+
+      const makeDocxTableFromGfm = (tok) => {
+        const headerCells = (tok.header || []).map(c => (c.text ?? '').trim());
+        const rowCells = (tok.rows || []).map(r => r.map(c => (c.text ?? '').trim()));
+        const headerRow = new TableRow({ children: headerCells.map(h => new TableCell({ children: [ new Paragraph(h) ] })) });
+        const dataRows = rowCells.map(r => new TableRow({ children: r.map(c => new TableCell({ children: [ new Paragraph(c) ] })) }));
+        return new Table({
+          rows: [headerRow, ...dataRows],
+          width: { size: 100, type: WidthType.PERCENTAGE }
+        });
+      };
+
+      for (const tok of tokens) {
+        switch (tok.type) {
+          case 'heading': {
+            const lvl = Math.max(1, Math.min(3, tok.depth));
+            const map = {1: HeadingLevel.HEADING_1, 2: HeadingLevel.HEADING_2, 3: HeadingLevel.HEADING_3};
+            children.push(new Paragraph({ text: tok.text, heading: map[lvl] }));
+            break;
+          }
+          case 'paragraph': {
+            pushParagraph(tok.text || '');
+            break;
+          }
+          case 'space': {
+            children.push(new Paragraph({ text: '' }));
+            break;
+          }
+          case 'list': {
+            for (const item of tok.items) {
+              const txt = (item.text || '').trim();
+              if (tok.ordered) {
+                children.push(new Paragraph({ children: [ new TextRun(`${item.index || 1}. ${txt}`) ] }));
+              } else {
+                children.push(new Paragraph({ text: txt, bullet: { level: 0 } }));
+              }
+              if (item.tokens) {
+                for (const sub of item.tokens) {
+                  if (sub.type === 'paragraph') pushParagraph(sub.text || '');
+                  if (sub.type === 'code') pushCodeBlock(sub.text || '');
+                }
+              }
+            }
+            break;
+          }
+          case 'code': {
+            const asciiTable = tryMakeAsciiTable(tok.text || '');
+            if (asciiTable) children.push(asciiTable);
+            else pushCodeBlock(tok.text || '');
+            break;
+          }
+          case 'table': {
+            const table = makeDocxTableFromGfm(tok);
+            children.push(table);
+            break;
+          }
+          case 'blockquote': {
+            const inner = tok.tokens?.map(t => t.text || '').join('\n') || '';
+            pushParagraph('— ' + inner);
+            break;
+          }
+          default: {
+            if (tok.text) pushParagraph(tok.text);
+            else children.push(new Paragraph({ text: '' }));
+            break;
+          }
+        }
+      }
+
+      const doc = new Document({ sections: [{ properties: {}, children }] });
+      const blob = await Packer.toBlob(doc);
+      downloadBlob(blob, sanitizeFileName(title) + '.docx');
+    });
+
+    document.getElementById('input').addEventListener('input', renderPreview);
+    document.getElementById('title').addEventListener('input', renderPreview);
+    if (window.marked) {
+      const mdAPI = (window.marked.marked || window.marked);
+      if (mdAPI.use) mdAPI.use({ gfm: true });
+    }
+    renderPreview();
+  </script>
+</body>
+</html>
